@@ -87,6 +87,10 @@ _SCP_REMOTE = re.compile(r"^(?:[\w.-]+@)?([\w.-]+):(?!//)(.+)$")
 _PLAIN_WORD = re.compile(r"^[A-Za-z][A-Za-z-]{0,40}$")
 
 
+def _is_unc(path: Path) -> bool:
+    return str(path).startswith(("\\\\", "//"))
+
+
 # ── finding repositories ───────────────────────────────────────────────────────
 
 def _read_json(path: Path) -> dict:
@@ -126,7 +130,10 @@ def _recent_editor_folders(db: Path) -> list:
     for entry in entries if isinstance(entries, list) else []:
         uri = entry.get("folderUri") if isinstance(entry, dict) else None
         if isinstance(uri, str) and uri.startswith("file://"):
-            path = unquote(urlsplit(uri).path)
+            parts = urlsplit(uri)
+            if parts.netloc and parts.netloc.lower() != "localhost":
+                continue
+            path = unquote(parts.path)
             if sys.platform == "win32" and re.match(r"^/[A-Za-z]:", path):
                 path = path[1:]
             folders.append(Path(path))
@@ -144,6 +151,8 @@ def known_folders(home: Path, platform: str) -> list:
 
 def _git_dir(folder: Path):
     """The .git folder of a repository (following "gitdir:" files of worktrees), or None."""
+    if _is_unc(folder):
+        return None
     dot_git = folder / ".git"
     if dot_git.is_dir():
         return dot_git
@@ -155,7 +164,7 @@ def _git_dir(folder: Path):
         if line.startswith("gitdir:"):
             target = Path(line[len("gitdir:"):].strip())
             target = target if target.is_absolute() else (folder / target)
-            return target if target.is_dir() else None
+            return target if not _is_unc(target) and target.is_dir() else None
     return None
 
 
@@ -178,15 +187,18 @@ def find_repositories(home: Path, platform: str = sys.platform, roots=None, know
         # Compare the folder itself, not its name: on case-insensitive disks
         # ~/Projects and ~/projects are the same folder.
         try:
+            folder = folder.resolve()
+            if _is_unc(folder):
+                return
             stat = folder.stat()
         except OSError:
             return
         if (stat.st_dev, stat.st_ino) not in identities:
             identities.add((stat.st_dev, stat.st_ino))
-            found.append(folder.resolve())
+            found.append(folder)
 
     for folder in (known if known is not None else known_folders(home, platform)):
-        if folder.is_dir():
+        if not _is_unc(folder) and folder.is_dir():
             root = _repo_root(folder.resolve(), home)
             if root:
                 add(root)
@@ -196,6 +208,8 @@ def find_repositories(home: Path, platform: str = sys.platform, roots=None, know
     while queue and visited < MAX_FOLDERS_VISITED:
         folder, depth = queue.pop(0)
         visited += 1
+        if _is_unc(folder):
+            continue
         if _git_dir(folder):
             add(folder)
             continue  # do not look for repositories inside repositories
@@ -331,7 +345,7 @@ def _setup_files(repo: Path, paths) -> list:
     return sorted(name for name in files if ".local." not in name.rsplit("/", 1)[-1])
 
 
-def setup_fingerprint(repo: Path, files) -> str:
+def setup_fingerprint(repo: Path, files) -> str | None:
     """SHA-256 over the names and contents of an agent setup's files.
 
     The contents are read only to compute this hash; they are never stored or returned.
@@ -344,7 +358,7 @@ def setup_fingerprint(repo: Path, files) -> str:
                 for chunk in iter(lambda: handle.read(1 << 16), b""):
                     file_hash.update(chunk)
         except OSError:
-            continue
+            return None
         combined.update(relative.encode("utf-8") + b"\0" + file_hash.hexdigest().encode("ascii") + b"\n")
     return combined.hexdigest()
 
@@ -456,4 +470,5 @@ def scan_repositories(history_path: Path, home=None, platform=None, roots=None, 
 
 
 if __name__ == "__main__":
-    print(json.dumps(scan_repositories(Path(tempfile.gettempdir()) / "footprints-repos-history.json"), indent=2))
+    home = Path.home()
+    print(json.dumps({"repository_count": len(find_repositories(home))}))

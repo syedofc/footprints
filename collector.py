@@ -874,4 +874,4 @@ def collect(home=None, platform=None, processes=None, applications_dirs=None,
 if __name__ == "__main__":
     import json
 
-    print(json.dumps(collect(), indent=2))
+    print(json.dumps({"evidence_count": len(collect()["evidence"])}))

@@ -102,6 +102,7 @@ class FootprintsIntegrationTest(unittest.TestCase):
             with TestClient(app, base_url="http://127.0.0.1") as client:
                 self.assertEqual(client.get("/footprints/repositories.js").status_code, 200)
                 scanned = client.post("/repos/scan", json={}, headers={"Origin": "http://127.0.0.1"})
+                self.assertEqual(scanned.headers["cache-control"], "no-store")
                 self.assertEqual(scanned.status_code, 200, scanned.text)
                 self.assertEqual(scanned.json(), fake)
                 self.assertEqual(client.get("/repos/scan").status_code, 404)

@@ -424,7 +424,7 @@ function discover(evidence, findingsCatalog = catalog) {
       finding.matches += count;
       finding.running ||= RUNNING_KINDS.has(kind);
       if (INSTALL_KINDS.has(kind)) {
-        const key = [kind, item.value, raw.editor ?? '', raw.browser ?? ''].join('|');
+        const key = JSON.stringify([kind, item.value, raw.editor, raw.browser, raw.profile]);
         if (!finding.installations.has(key)) {
           finding.installations.set(key, Object.fromEntries(Object.entries({
             kind, value: item.value, version: raw.version, signer: raw.signer,
@@ -524,9 +524,9 @@ function findingCard(finding) {
   const broad = lines.filter(line => line.level === 'high').length;
   const { status, text } = finding.verification;
   const verifiedBadge = {
-    confirmed: () => badge('✓ Verified', 'ok', text),
-    unverified: () => badge('⚠ Unverified', 'warn', text),
-    signed: () => badge('Signed', 'info', text),
+    confirmed: () => badge('✓ Expected publisher signature found', 'ok', text),
+    unverified: () => badge('⚠ Publisher not confirmed', 'warn', text),
+    signed: () => badge('Signed evidence found', 'info', text),
   }[status]?.() ?? badge('Publisher not checked', 'muted', text);
   return el('li', { class: `card${status === 'unverified' ? ' card-warn' : ''}` },
     el('div', { class: 'card-head' },

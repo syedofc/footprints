@@ -1,6 +1,6 @@
-# Footprints Discovery
+# Footprints
 
-Footprints finds supported AI tools and repository agent setups on your device. Review what it found and choose what to register. [Forkit Core](https://github.com/Forkit-Dev-Core/Forkit_Dev) creates and verifies the passports inside Footprints.
+Footprints is a local app for AI discovery, evidence insights, and passport workflows. It finds supported AI tools and repository agent setups on your device. [Forkit Core](https://github.com/Forkit-Dev-Core/Forkit_Dev) creates each passport and verifies its identity fields.
 
 ## Get started
 
@@ -8,7 +8,7 @@ Footprints finds supported AI tools and repository agent setups on your device. 
 
 Download **Footprints-Windows-x64.zip** from [GitHub Releases](https://github.com/Forkit-Dev-Core/footprints/releases), extract it, and double-click **Start Footprints.cmd**. It opens Footprints in your browser. The ZIP includes Forkit Core, Python, and a sample file. See [Windows preview releases](docs/windows-release.md) for the maintainer workflow.
 
-In **Device**, select **Scan this device**, then **Create passport** on a supported installation. Review what will be registered, edit the agent name if you like, and select **Register passport**. The **Passports** tab shows your saved records by category. Windows scans can find supported processes, commands and extensions. Installed-app inventory and publisher signature checks are currently available on macOS.
+These device and repository discovery instructions describe this source branch. The existing Windows preview uses simulated discovery. When a Windows ZIP includes live discovery, open **Device**, select **Scan this device**, then choose **Create passport** on a supported installation. Windows scans can find supported processes, commands, and extensions. Installed-app inventory and publisher signature checks are currently available on macOS.
 
 ### Windows quick start
 
@@ -41,13 +41,15 @@ python -m pip install -r requirements.txt
 python serve.py
 ```
 
-To register a model file, open [Footprints on this device](http://127.0.0.1:8765/footprints/) and choose **Passports → Register a model file**. Choose a nonempty file up to 64 MiB, enter its details, then select **Create and verify passport**. To try it with a small public artifact, use the [Tiny Random BERT safetensors file](https://huggingface.co/hf-internal-testing/tiny-random-bert/blob/f171d7baecaf37b5da5a3616d8833b9969753535/model.safetensors).
+To register a model file, open [Footprints on this device](http://127.0.0.1:8765/footprints/) and choose **Passports → Register a model file**. Choose a nonempty file up to 64 MiB, enter its details, then select **Create and verify passport**. Use the synthetic [sample-artifact.txt](scripts/sample-artifact.txt) from the checkout or extracted Windows ZIP for a public example.
 
-For that example, enter `tiny-random-bert`, `1.0.0`, and `Hugging Face`. Choose **Other** for the task and **Encoder only** for the architecture. The version is a local passport label for the example.
+For that example, enter `footprints-sample`, `1.0.0`, and `Footprints example`. Choose **Other** for both task and architecture.
 
 The browser computes SHA-256 from the selected file. Core receives the hash, filename, and form metadata, and stores a passport in `~/.forkit/footprints`. Use `--registry-root` to choose another local directory. Verification checks that Core can derive the same ID from the stored identity fields. The UI displays the submitted file hash and the returned passport ID.
 
 You can also open `index.html` directly to try the simulated discovery example. That example uses fictional signals and does not scan your device.
+
+Use the simulated page and a registry containing only synthetic passports for screenshots and reports. Print hides the live workspace. See [what Footprints stores locally](docs/passports.md#local-storage-and-sharing).
 
 ## Scan this device
 
@@ -59,7 +61,7 @@ With `python serve.py` running, the page shows **Scan this device**. It reads ap
 
 ## Agent passports
 
-Each agent setup found in a repository (for example its Claude Code files) can get a Forkit Core **agent passport** from the Repositories tab. The passport records a fingerprint of the setup's files. The Passports tab then checks every passport: is the record unchanged, and do the files still match? See [docs/passports.md](docs/passports.md).
+Each discovered repository agent setup can get a Forkit Core **agent passport**. The Passports tab shows whether the record's identity fields match the saved ID and whether the measured setup files still match their fingerprint. See [the passport checks](docs/passports.md).
 
 ## Run the checks
 

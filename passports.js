@@ -8,35 +8,40 @@
 // See tool_passports.py and repo_passports.py for what goes into a passport.
 
 const RECORD_BADGES = {
-  intact: { text: '✓ Record intact', tone: 'ok', title: 'The stored passport still matches its ID' },
+  intact: { text: '✓ Record ID matches', tone: 'ok', title: 'Core recomputed the ID from the stored identity fields' },
 };
 const SETUP_BADGES = {
   unchanged: { text: '✓ Setup unchanged', tone: 'ok', title: 'The agent files still match the passport' },
   changed: { text: '⚠ Setup changed', tone: 'warn', title: 'The agent files were edited since this passport' },
   'files-removed': { text: '⚠ Agent files removed', tone: 'warn', title: 'The repository no longer has these agent files' },
   'repo-missing': { text: 'Repository not found', tone: 'muted', title: 'The repository moved or was deleted' },
+  unreadable: { text: '⚠ Setup fingerprint unavailable', tone: 'warn', title: 'One or more setup files could not be read' },
 };
 const INSTALL_BADGES = {
-  unchanged: () => ({ text: '✓ Same program', tone: 'ok', title: 'The installed program still matches the passport' }),
+  unchanged: () => ({ text: '✓ Installation fingerprint matches', tone: 'ok', title: 'The files listed under Fingerprint of still match the saved fingerprint' }),
   updated: passport => ({ text: `New version installed: v${passport.current_version}`, tone: 'info',
     title: 'The tool was updated since this passport' }),
-  changed: () => ({ text: '⚠ Program changed', tone: 'warn',
-    title: 'The program changed but reports the same version: rebuilt or replaced' }),
+  changed: () => ({ text: '⚠ Installation fingerprint differs', tone: 'warn',
+    title: 'The measured files differ without a detected version change' }),
+  unreadable: () => ({ text: '⚠ Fingerprint unavailable', tone: 'warn', title: 'One or more measured files could not be read' }),
+  unknown: () => ({ text: 'Fingerprint not checked', tone: 'muted', title: 'The saved installation could not be checked on this device' }),
   missing: () => ({ text: 'Not installed', tone: 'muted', title: 'This installation is no longer on the device' }),
 };
 const PUBLISHER_BADGES = {
-  verified: { text: '✓ Publisher verified', tone: 'ok', title: 'Still signed by the same publisher' },
-  changed: { text: '⚠ Publisher changed', tone: 'warn', title: 'Now signed by someone else, or no longer signed' },
-  user: { text: 'Vouched by you', tone: 'muted', title: 'No publisher signature; a person vouched for this tool' },
+  verified: { text: '✓ Signing team matches', tone: 'ok', title: 'The macOS code signature verifies against the recorded team; resources are not checked' },
+  changed: { text: '⚠ Signing identity differs', tone: 'warn', title: 'A different signing identity was found, or the program is unsigned' },
+  invalid: { text: '⚠ Invalid code signature', tone: 'warn', title: 'macOS could not verify the current code signature' },
+  user: { text: 'Vouched for by a person', tone: 'muted', title: 'The recorded name is a user claim; publisher signature verification was not performed or did not establish a publisher' },
+  'not-checked': { text: 'Publisher not checked', tone: 'muted', title: 'No current publisher verification result is available' },
 };
 const NEEDS_ATTENTION = {
-  setup: ['changed', 'files-removed'], install: ['changed'], publisher: ['changed'],
+  setup: ['changed', 'files-removed', 'unreadable'], install: ['changed', 'unreadable'], publisher: ['changed', 'invalid'],
 };
 
 function passportBadges(passport) {
   const badges = [{ text: `v${passport.version}`, tone: 'info' }];
   badges.push(RECORD_BADGES[passport.record]
-    ?? { text: '⚠ Record altered', tone: 'warn', title: `Forkit Core check: ${passport.record}` });
+    ?? { text: '⚠ Record ID check failed', tone: 'warn', title: `Forkit Core check: ${passport.record}` });
   if (passport.kind === 'repo-agent' && SETUP_BADGES[passport.setup]) badges.push(SETUP_BADGES[passport.setup]);
   if (passport.kind === 'device-tool') {
     if (INSTALL_BADGES[passport.install]) badges.push(INSTALL_BADGES[passport.install](passport));
@@ -67,7 +72,7 @@ let selectedPassportId = null;
 let passportLoad = 0;
 
 function hasPublisherSignature(signer) {
-  return typeof signer === 'string' && !['unsigned', 'invalid', 'script'].includes(signer);
+  return typeof signer === 'string' && Boolean(signer.trim()) && !['unsigned', 'invalid', 'script'].includes(signer);
 }
 
 // From a repository card: a passport for one agent setup of the repository.
@@ -114,7 +119,7 @@ function renderPassportForm() {
   const tool = draft.type === 'tool';
   // Only an installation whose own program carries a valid signature gets its publisher from it;
   // e.g. a Chrome extension has no signature even when the tool's other parts do.
-  const signed = tool && hasPublisherSignature(draft.installation.signer) && draft.verification?.status === 'confirmed';
+  const signed = tool && hasPublisherSignature(draft.installation.signer);
   const detectedVersion = tool ? draft.installation.version : null;
   const status = el('p', { class: 'status', role: 'status' });
   const sourceName = tool ? draft.label : `${draft.repo.split(/[\\/]/).pop()} · ${draft.label}`;
@@ -138,7 +143,7 @@ function renderPassportForm() {
       el('label', {}, detectedVersion ? 'Version (detected)' : 'Version', version),
       signed
         ? el('p', { class: 'small' }, el('strong', {}, 'Publisher: '),
-          draft.verification.text.replace(/^Signed by /, ''))
+          'Footprints will check the signature of this installation during registration.')
         : el('label', {}, 'Vouched for by', creator)),
     el('div', { class: 'registration-actions' }, submit, cancel),
     status);
@@ -159,13 +164,17 @@ function renderPassportForm() {
       const message = document.getElementById('registration-result');
       message.textContent = result.status === 'already-registered'
         ? `${name} is already registered.`
-        : `${name} registered. ${result.check?.valid ? 'Record verified.' : 'Check the saved record.'}`;
+        : `${name} registered. ${result.check?.valid ? 'Record ID matches.' : 'Check the saved record.'}`;
       container.close();
       showView('passports');
       message.focus();
       await loadPassports(result.passport.id);
     } catch (error) {
       if (error.payload?.suggested_version) version.value = error.payload.suggested_version;
+      if (error.payload?.publisher_vouch_required && signed) {
+        renderPassportFormForVouch(draft, agentName.value, version.value, error.message);
+        return;
+      }
       status.textContent = `Passport not created. ${error.message}`;
     } finally {
       submit.disabled = false;
@@ -173,6 +182,15 @@ function renderPassportForm() {
     }
   });
   container.replaceChildren(form);
+}
+
+function renderPassportFormForVouch(draft, displayName, version, message) {
+  passportDraft = { ...draft, displayName, suggestedVersion: version,
+    installation: { ...draft.installation, signer: undefined } };
+  renderPassportForm();
+  const dialog = document.getElementById('agent-passport');
+  dialog.querySelector('[role="status"]').textContent = message;
+  dialog.querySelector('input[name="creator"]').focus();
 }
 
 function showPassportDetail(passport, focus = true) {
@@ -195,7 +213,8 @@ function setupEvidence(passport) {
   const added = passport.files_added ?? [];
   const removed = passport.files_removed ?? [];
   const observations = passport.scan_history ?? [];
-  const labels = { matches: 'Matched the registered setup', different: 'Setup differed', 'not-found': 'Setup not found in scan' };
+  const labels = { matches: 'Matched the registered setup', different: 'Setup differed',
+    'not-found': 'Setup not found in scan', unreadable: 'Setup fingerprint unavailable' };
   return el('section', {},
     el('h4', {}, 'Setup evidence'),
     added.length ? el('p', {}, 'Added since registration: ', added.join(', ')) : null,
@@ -281,7 +300,7 @@ async function loadPassports(openId = null) {
       { label: 'Repository setup passports', value: totals.agents },
       { label: 'Model passports', value: totals.models },
       { label: 'Need attention', value: totals.attention, tone: totals.attention ? 'warn' : 'ok',
-        hint: 'Record altered, program or publisher changed, or agent files changed' },
+        hint: 'A record ID check failed, measured files differ or are unreadable, or a signing check failed' },
     ]);
     const section = passport => passport.kind === 'device-tool' ? INSTALLATION_SECTIONS[passport.installation_kind] ?? 'Other tools'
       : passport.kind === 'repo-agent' ? 'Repositories' : 'Models';

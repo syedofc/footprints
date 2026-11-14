@@ -74,6 +74,11 @@ class RepoTrackerTest(unittest.TestCase):
         info = describe_repository(repo, self.home)
         self.assertEqual((info["how"], info["origin"]), ("created here", None))
 
+    def test_skips_explicit_network_share_paths(self):
+        remote = Path("//example.invalid/share/project")
+        with unittest.mock.patch.object(Path, "is_dir", side_effect=AssertionError("network path probed")):
+            self.assertEqual(find_repositories(self.home, roots=[remote], known=[remote]), [])
+
     def test_ai_configuration_names_counts_and_server_names_only(self):
         repo = make_repo(self.home / "app")
         for name in ("AGENTS.md", ".github/copilot-instructions.md", ".cursor/rules/style.mdc",

@@ -26,6 +26,8 @@ and an existing passport is never overwritten.
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import sys
 from pathlib import Path
@@ -95,8 +97,50 @@ def _repo_from_latest_scan(history_path: Path, home: Path, path: str) -> Path:
     return resolve_display_path(path, home)
 
 
-def _passports_named(registry: LocalRegistry, name: str) -> list:
-    return [row for row in registry.list(passport_type="agent") if row.get("name") == name]
+def scoped_name(name: str, scope: tuple[str, ...]) -> str:
+    """Bind a local locator to the Core ID without putting it in the name."""
+    digest = hashlib.sha256("\0".join(scope).encode("utf-8")).hexdigest()
+    return f"{name}/{digest}"
+
+
+def version_key(version: str) -> tuple[int, ...] | None:
+    if not re.fullmatch(r"[0-9]{1,6}\.[0-9]{1,6}(?:\.[0-9]{1,6})?", version):
+        return None
+    return tuple(map(int, (version + ".0" * (2 - version.count("."))).split(".")))
+
+
+def scoped_versions(registry: LocalRegistry, name: str, legacy_name: str, matches, version: str):
+    """Verified records for this subject, with the nearest earlier version as parent."""
+    records = {}
+    for row in registry.list(passport_type="agent"):
+        if row.get("name") not in (name, legacy_name):
+            continue
+        stored = registry.get_agent(row["id"])
+        if stored is None or not registry.verify_passport(row["id"]).get("valid"):
+            continue
+        data = stored.to_dict()
+        if matches((data.get("metadata") or {}).get("context") or {}):
+            records[data["id"]] = data
+    current = version_key(version)
+    earlier = [(key, data) for data in records.values()
+               if (key := version_key(data["version"])) is not None and key < current]
+    parent = max(earlier, key=lambda pair: (pair[0], pair[1]["id"]))[1]["id"] if earlier else None
+    return records, parent
+
+
+def same_version(records, passport):
+    return [record for record in records.values() if version_key(record["version"]) == version_key(passport.version)]
+
+
+def existing_version(records, passport):
+    # Preserve exact Core IDs for previously recorded versions of this subject.
+    identity = passport.to_dict()
+    return next((record for record in records if record["artifact_hash"] == passport.artifact_hash
+                 and record["creator"] == identity["creator"]), None)
+
+
+def repo_path_key(path: str, home: Path) -> str:
+    return os.path.normcase(os.path.abspath(resolve_display_path(path, home)))
 
 
 def passport_display_name(request: dict):
@@ -130,18 +174,26 @@ def create_repo_agent_passport(registry_root: Path, history_path: Path, request:
     setup = next((item for item in info["agents"] if item["tool"] == tool), None)
     if setup is None:
         raise PassportRequestError(f"No {AGENT_SETUPS[tool]['label']} files in this repository.", 404)
+    if setup["fingerprint"] is None:
+        raise PassportRequestError("The setup files could not all be read. Scan repositories again.", 409)
 
     registry = _registry(registry_root)
-    model = provider_model(registry, setup["provider"])
     repo_slug = _SLUG.sub("-", Path(info["path"]).name.lower()).strip("-") or "repository"
-    name = f"{repo_slug}/{tool}"
-    previous = _passports_named(registry, name)  # newest first
+    legacy_name = f"{repo_slug}/{tool}"
+    path_key = repo_path_key(info["path"], home)
+    name = scoped_name(legacy_name, (SOURCE, path_key, tool))
+    previous, parent = scoped_versions(registry, name, legacy_name, lambda context: (
+        context.get("source") == SOURCE and context.get("tool") == tool
+        and isinstance(context.get("repo_path"), str)
+        and repo_path_key(context["repo_path"], home) == path_key
+    ), version)
+    model = provider_model(registry, setup["provider"])
     servers = [entry["server"] for entry in info["ai"].get("mcp_servers", []) if entry["config"] in setup["files"]]
     passport = AgentPassport(
         name=name, version=version, creator={"name": creator, "organization": organization},
         model_id=model.id, task_type="code-assistant", architecture="Tool-Use", role="assistant",
         artifact_hash=setup["fingerprint"], tools=[{"name": server} for server in servers],
-        parent_agent_id=previous[0]["id"] if previous else None,
+        parent_agent_id=parent,
         deployment_env="local", status="active",
         description=f"{setup['label']} setup in {info['path']}",
         metadata={"context": {"source": SOURCE, "repo_path": info["path"], "repo_origin": info.get("origin"),
@@ -149,15 +201,17 @@ def create_repo_agent_passport(registry_root: Path, history_path: Path, request:
                               "display_name": display_name}},
     )
 
-    existing = registry.get_agent(passport.id)
+    taken = same_version(previous, passport)
+    existing = existing_version(taken, passport)
     if existing is not None:
-        return {"status": "already-registered", "passport": existing.to_dict(),
-                "check": registry.verify_passport(passport.id)}
-    taken = [row for row in previous if row.get("version") == version]
+        return {"status": "already-registered", "passport": existing,
+                "check": registry.verify_passport(existing["id"])}
     if taken:
         raise PassportRequestError(
             f"Version {version} already has a passport for a different setup. "
             f"Use a new version, e.g. {next_version(version)}.", 409, suggested_version=next_version(version))
+    if registry.get_agent(passport.id) is not None:
+        raise PassportRequestError("This ID already exists with conflicting local metadata.", 409)
     registry.register_agent(passport)
     return {"status": "registered", "passport": passport.to_dict(), "check": registry.verify_passport(passport.id)}
 
@@ -171,8 +225,9 @@ def _setup_details(context: dict, artifact_hash, home: Path) -> dict:
         return {"setup": "files-removed", "files_removed": context.get("files") or []}
     saved_files = set(context.get("files") or [])
     current_files = set(current["files"])
+    current_hash = current["fingerprint"]
     return {
-        "setup": "unchanged" if current["fingerprint"] == artifact_hash else "changed",
+        "setup": "unreadable" if current_hash is None else "unchanged" if current_hash == artifact_hash else "changed",
         "files_added": sorted(current_files - saved_files),
         "files_removed": sorted(saved_files - current_files),
     }
@@ -187,7 +242,12 @@ def _setup_scan_history(scans: list, context: dict, artifact_hash) -> list:
         if repo is None:
             continue
         setup = next((row for row in repo.get("agents") or [] if isinstance(row, dict) and row.get("tool") == context.get("tool")), None)
-        state = "not-found" if setup is None else "matches" if setup.get("fingerprint") == artifact_hash else "different"
+        if setup is None:
+            state = "not-found"
+        elif not setup.get("fingerprint"):
+            state = "unreadable"
+        else:
+            state = "matches" if setup["fingerprint"] == artifact_hash else "different"
         observations.append({"at": scan["scanned_at"], "state": state})
         if len(observations) == 3:
             break
@@ -196,7 +256,7 @@ def _setup_scan_history(scans: list, context: dict, artifact_hash) -> list:
 
 def list_passports(registry_root: Path, home=None, platform=None, tool_state_options=None) -> dict:
     """Every passport in the registry, with its record check, and the setup or install check."""
-    from tool_passports import SOURCE as TOOL_SOURCE, installation_summary, tool_state  # avoids a circular import
+    from tool_passports import SOURCE as TOOL_SOURCE, installation_summary, surface as tool_surface, tool_state
 
     home = Path(home) if home is not None else Path.home()
     platform = platform or sys.platform
@@ -215,7 +275,8 @@ def list_passports(registry_root: Path, home=None, platform=None, tool_state_opt
             "creator": (data.get("creator") or {}).get("name"),
             "organization": (data.get("creator") or {}).get("organization"),
             "created_at": data.get("created_at"), "description": data.get("description"),
-            "record": "intact" if check.get("valid") else check.get("reason", "invalid"),
+            "record": "intact" if check.get("valid") and check.get("stored_id") == row["id"]
+            else "id_mismatch" if check.get("valid") else check.get("reason", "invalid"),
             "kind": "model", "display_name": context.get("display_name"),
         }
         if context.get("source") == SOURCE and data.get("passport_type") == "agent":
@@ -230,7 +291,7 @@ def list_passports(registry_root: Path, home=None, platform=None, tool_state_opt
                         **_setup_details(context, data.get("artifact_hash"), home))
         elif context.get("source") == TOOL_SOURCE and data.get("passport_type") == "agent":
             item.update(kind="device-tool", finding=context.get("finding"), label=context.get("label"),
-                        installation=installation_summary(context), surface=data["name"].split("/", 1)[-1],
+                        installation=installation_summary(context), surface=tool_surface(context),
                         installation_kind=context.get("kind"),
                         creator_source=context.get("creator_source"), parent=data.get("parent_agent_id"),
                         fingerprinted=context.get("fingerprinted", []),

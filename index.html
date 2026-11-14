@@ -127,6 +127,14 @@
 <script src="repositories.js" defer></script>
 <script src="passports.js" defer></script>
 <script src="passport.js" defer></script>
+<style>
+  .print-note { display: none; }
+  @media print {
+    body:not([data-footprints-mode="sample"]) main { display: none; }
+    dialog { display: none; }
+    body[data-footprints-mode="local"] .print-note { display: block; }
+  }
+</style>
 <main>
   <header class="app-head">
     <div>
@@ -171,6 +179,7 @@
       <button type="button" class="primary" id="scan-repos" hidden>Scan repositories</button>
     </div>
     <p class="banner" id="repos-offline">Start the local app with <code>python serve.py</code> to scan repositories.</p>
+    <p class="muted" id="repos-privacy" hidden>Local results can include repository names, paths, and remote hosts. Use the simulated sample for screenshots and reports.</p>
     <p id="repos-status" class="status" role="status"></p>
     <div id="repos-tiles" class="tiles"></div>
     <div class="toolbar">
@@ -247,4 +256,8 @@
   </section>
 </main>
 <dialog id="agent-passport" class="passport-dialog" aria-labelledby="registration-heading"></dialog>
+<aside class="print-note">
+  <h1>Footprints</h1>
+  <p>Open the simulated sample to print an example without local identifiers.</p>
+</aside>
 </html>

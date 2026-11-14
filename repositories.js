@@ -119,8 +119,9 @@ function repoCard(repo, mark, fields) {
         el('div', {},
           el('strong', {}, setup.label),
           el('p', { class: 'muted small' }, setup.files.join(', '),
-            ' · ', el('span', { class: 'mono', title: `Fingerprint of these files: ${setup.fingerprint}` },
-              setup.fingerprint.slice(0, 12)))),
+            ' · ', setup.fingerprint
+              ? el('span', { class: 'mono', title: `Fingerprint of these files: ${setup.fingerprint}` }, setup.fingerprint.slice(0, 12))
+              : 'Fingerprint unavailable')),
         el('button', {
           type: 'button', class: 'secondary',
           onclick: () => startAgentPassport({ repo: repo.path, tool: setup.tool, label: setup.label, files: setup.files }),

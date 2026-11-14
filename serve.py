@@ -34,7 +34,10 @@ async def restrict_core_requests(request: Request, call_next):
     if request.method == "GET" and (
         path in UI_PATHS or re.fullmatch(r"/passports/[0-9a-f]{64}", path)
     ):
-        return await call_next(request)
+        response = await call_next(request)
+        if path.startswith("/passports/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     if request.method != "POST" or (
         path not in ("/models", "/discovery/scan", "/repos/scan", "/passports/repo-agent", "/passports/list", "/passports/tool")
@@ -61,7 +64,9 @@ async def restrict_core_requests(request: Request, call_next):
         if path == "/models" and "id" in payload:
             return JSONResponse({"detail": "Core assigns the passport ID"}, status_code=422)
 
-    return await call_next(request)
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def create_footprints_app(registry_root: Path, collect_evidence=collect, scan_repos=None):
@@ -72,7 +77,14 @@ def create_footprints_app(registry_root: Path, collect_evidence=collect, scan_re
 
     @app.get("/footprints/", include_in_schema=False)
     def footprints_index():
-        return FileResponse(ui_root / "index.html", headers={"X-Frame-Options": "DENY", **NO_CACHE})
+        return FileResponse(ui_root / "index.html", headers={
+            "X-Frame-Options": "DENY",
+            "Content-Security-Policy": (
+                "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; "
+                "connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+            ),
+            **NO_CACHE,
+        })
 
     @app.get("/footprints/discovery.js", include_in_schema=False)
     def discovery_script():

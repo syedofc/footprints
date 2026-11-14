@@ -85,7 +85,7 @@ async function register(event) {
     result.hidden = false;
     const verified = await verify(passport.id);
     document.getElementById('registration-result').textContent = verified
-      ? `${name} registered. Record verified.`
+      ? `${name} registered. Record ID matches.`
       : `${name} registered. Check the verification result below.`;
     await loadPassports();
     result.focus();

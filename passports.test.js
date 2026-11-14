@@ -8,23 +8,23 @@ const tool = (install, publisher = 'verified', extra = {}) =>
 
 test('shows version, record check and setup check for repository passports', () => {
   assert.deepEqual(passportBadges(agent('unchanged')).map(badge => [badge.text, badge.tone]), [
-    ['v1.0.0', 'info'], ['✓ Record intact', 'ok'], ['✓ Setup unchanged', 'ok'],
+    ['v1.0.0', 'info'], ['✓ Record ID matches', 'ok'], ['✓ Setup unchanged', 'ok'],
   ]);
   assert.deepEqual(passportBadges(agent('changed', 'id_mismatch')).map(badge => badge.text),
-    ['v1.0.0', '⚠ Record altered', '⚠ Setup changed']);
+    ['v1.0.0', '⚠ Record ID check failed', '⚠ Setup changed']);
   assert.deepEqual(passportBadges({ kind: 'provider-model', version: '1.0', record: 'intact' }).map(badge => badge.text),
-    ['v1.0', '✓ Record intact', 'Provider model']);
+    ['v1.0', '✓ Record ID matches', 'Provider model']);
 });
 
 test('shows install and publisher checks for tool passports', () => {
   assert.deepEqual(passportBadges(tool('unchanged')).map(badge => badge.text),
-    ['v2.1.287', '✓ Record intact', '✓ Same program', '✓ Publisher verified']);
+    ['v2.1.287', '✓ Record ID matches', '✓ Installation fingerprint matches', '✓ Signing team matches']);
   assert.deepEqual(passportBadges(tool('updated', 'verified', { current_version: '2.1.300' })).map(badge => badge.text),
-    ['v2.1.287', '✓ Record intact', 'New version installed: v2.1.300', '✓ Publisher verified']);
+    ['v2.1.287', '✓ Record ID matches', 'New version installed: v2.1.300', '✓ Signing team matches']);
   assert.deepEqual(passportBadges(tool('changed', 'changed')).map(badge => badge.text),
-    ['v2.1.287', '✓ Record intact', '⚠ Program changed', '⚠ Publisher changed']);
+    ['v2.1.287', '✓ Record ID matches', '⚠ Installation fingerprint differs', '⚠ Signing identity differs']);
   assert.deepEqual(passportBadges(tool('missing', 'user')).map(badge => badge.text),
-    ['v2.1.287', '✓ Record intact', 'Not installed', 'Vouched by you']);
+    ['v2.1.287', '✓ Record ID matches', 'Not installed', 'Vouched for by a person']);
 });
 
 test('an update is normal, a changed program or publisher needs attention', () => {

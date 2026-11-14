@@ -117,9 +117,11 @@ const isLocalService = () => typeof location !== 'undefined'
 
 if (typeof document !== 'undefined') {
   const connection = document.getElementById('connection');
+  document.body.dataset.footprintsMode = isLocalService() ? 'local' : 'sample';
   if (isLocalService()) {
     connection.textContent = 'On this device';
     connection.className = 'badge badge-ok';
+    document.getElementById('repos-privacy').hidden = false;
   }
   setupTabs();
 }

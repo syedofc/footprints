@@ -64,7 +64,8 @@ class ToolPassportTest(unittest.TestCase):
         result = self.create(creator="Ignored Person", version="9.9.9")
         passport = result["passport"]
         self.assertEqual(result["status"], "registered")
-        self.assertEqual((passport["name"], passport["version"]), ("claude-desktop/app", "4.16336.0"))
+        self.assertRegex(passport["name"], r"^claude-desktop/app/[a-f0-9]{64}$")
+        self.assertEqual(passport["version"], "4.16336.0")
         self.assertEqual(passport["creator"], {"name": "Example Corp", "organization": None, "email": None, "url": None})
         context = passport["metadata"]["context"]
         self.assertEqual((context["creator_source"], context["publisher_team"], context["version_source"]),
@@ -113,7 +114,8 @@ class ToolPassportTest(unittest.TestCase):
             with self.assertRaises(PassportRequestError, msg=missing):
                 self.create(**request, **missing)
         passport = self.create(**request, creator="Jane", version="0.86.1", display_name="My terminal agent")["passport"]
-        self.assertEqual((passport["name"], passport["creator"]["name"]), ("aider/cli", "Jane"))
+        self.assertRegex(passport["name"], r"^aider/cli/[a-f0-9]{64}$")
+        self.assertEqual(passport["creator"]["name"], "Jane")
         self.assertEqual(passport["metadata"]["context"]["creator_source"], "user")
         self.assertEqual(passport["metadata"]["context"]["display_name"], "My terminal agent")
         self.assertEqual(self.state(passport["id"]), ("unchanged", "user"))
@@ -128,7 +130,8 @@ class ToolPassportTest(unittest.TestCase):
             (extensions / folder / "package.json").write_text(json.dumps({"version": version}))
         editor = self.create(finding="claude-code", label="Claude Code", kind="editor-extension",
                              value="anthropic.claude-code", editor="vscode", creator="Jane")["passport"]
-        self.assertEqual((editor["name"], editor["version"]), ("claude-code/vscode-extension", "2.1.322"))
+        self.assertRegex(editor["name"], r"^claude-code/vscode-extension/[a-f0-9]{64}$")
+        self.assertEqual(editor["version"], "2.1.322")
 
         chrome = self.home / "Library" / "Application Support" / "Google" / "Chrome" / "Default" / "Extensions" / ("a" * 32)
         (chrome / "1.0.106_0" / "_metadata").mkdir(parents=True)
@@ -136,8 +139,44 @@ class ToolPassportTest(unittest.TestCase):
         (chrome / "1.0.106_0" / "_metadata" / "verified_contents.json").write_text("[]")
         browser = self.create(finding="claude-in-chrome", label="Claude in Chrome", kind="browser-extension",
                               value="a" * 32, browser="chrome", profile="Default", creator="Jane")["passport"]
-        self.assertEqual((browser["name"], browser["version"]), ("claude-in-chrome/chrome-extension", "1.0.106"))
+        self.assertRegex(browser["name"], r"^claude-in-chrome/chrome-extension/[a-f0-9]{64}$")
+        self.assertEqual(browser["version"], "1.0.106")
         self.assertEqual(browser["metadata"]["context"]["fingerprinted"], ["manifest", "web-store-verified-contents"])
+
+    def test_browser_profiles_do_not_share_ids_or_lineage(self):
+        request = dict(finding="claude-in-chrome", label="Claude in Chrome", kind="browser-extension",
+                       value="a" * 32, browser="chrome", creator="Example")
+        root = self.home / "Library" / "Application Support" / "Google" / "Chrome"
+        for profile in ("Default", "Profile 1"):
+            folder = root / profile / "Extensions" / request["value"] / "1.0.0_0"
+            folder.mkdir(parents=True)
+            (folder / "manifest.json").write_text("{}")
+        first = self.create(**request, profile="Default")["passport"]
+        second = self.create(**request, profile="Profile 1")["passport"]
+        self.assertEqual(first["artifact_hash"], second["artifact_hash"])
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertIsNone(second["parent_agent_id"])
+        newer = root / "Profile 1" / "Extensions" / request["value"] / "2.0.0_0"
+        newer.mkdir()
+        (newer / "manifest.json").write_text("{}")
+        self.assertEqual(self.create(**request, profile="Profile 1")["passport"]["parent_agent_id"], second["id"])
+
+    def test_fingerprint_and_publisher_checks_report_unavailable_evidence(self):
+        app = make_app(self.apps, "com.example.tool", "1.0.0")
+        passport_id = self.create()["passport"]["id"]
+        program = app / "Contents" / "MacOS" / "Tool"
+        stat = program.stat()
+        program.write_bytes(b"replace")
+        os.utime(program, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        self.signer = None
+        self.assertEqual(self.state(passport_id), ("changed", "not-checked"))
+        self.signer = "invalid"
+        self.assertEqual(self.state(passport_id), ("changed", "invalid"))
+        self.signer = TEAM
+        program.unlink()
+        self.assertEqual(self.state(passport_id), ("unreadable", "verified"))
+        with self.assertRaises(PassportRequestError):
+            self.create()
 
     def test_rejects_identifiers_that_are_not_plain_names(self):
         for request in ({"value": "../../etc"}, {"kind": "cli", "value": "a b"}, {"kind": "process"},

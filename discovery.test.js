@@ -384,7 +384,7 @@ test('lists each installation of a tool that can get a passport', () => {
     { kind: 'browser-extension', value: 'fcoeoabgfenejglbffodgkkbkcdhcgfn', browser: 'chrome', profile: 'Default', version: '1.0.106' },
     { kind: 'browser-extension', value: 'fcoeoabgfenejglbffodgkkbkcdhcgfn', browser: 'chrome', profile: 'Profile 9', version: '1.0.106' },
   ]);
-  assert.equal(chrome.installations.length, 1);   // one passport per browser, not per profile
+  assert.deepEqual(chrome.installations.map(installation => installation.profile), ['Default', 'Profile 9']);
   assert.deepEqual(discover([{ kind: 'process', value: 'Cursor', app: 'com.todesktop.230313mzl4w4u92' }])[0].installations, []);
 });
 

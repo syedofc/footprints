@@ -63,7 +63,8 @@ class RepoPassportTest(unittest.TestCase):
         self.assertEqual(result["status"], "registered")
         self.assertTrue(result["check"]["valid"])
         passport = result["passport"]
-        self.assertEqual((passport["name"], passport["version"], passport["passport_type"]), ("app/claude-code", "1.0.0", "agent"))
+        self.assertRegex(passport["name"], r"^app/claude-code/[a-f0-9]{64}$")
+        self.assertEqual((passport["version"], passport["passport_type"]), ("1.0.0", "agent"))
         self.assertEqual(passport["creator"]["organization"], "Example Team")
         self.assertEqual([tool["name"] for tool in passport["tools"]], ["github"])
         self.assertEqual(passport["artifact_hash"], {s["tool"]: s for s in agent_setups(self.repo)}["claude-code"]["fingerprint"])
@@ -89,6 +90,47 @@ class RepoPassportTest(unittest.TestCase):
         second = self.create(version="1.1.0")["passport"]
         self.assertEqual(second["parent_agent_id"], first["id"])
         self.assertNotEqual(second["id"], first["id"])
+
+    def test_same_name_clones_have_independent_ids_and_lineage(self):
+        clone = self.home / "Projects" / "other" / "app"
+        shutil.copytree(self.repo, clone)
+        self.scan()
+        first = self.create()["passport"]
+        second = self.create(repo="~/Projects/other/app")["passport"]
+        self.assertEqual(first["artifact_hash"], second["artifact_hash"])
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertIsNone(second["parent_agent_id"])
+        newer = self.create(repo="~/Projects/other/app", version="2.0")["passport"]
+        self.assertEqual(newer["parent_agent_id"], second["id"])
+        self.assertEqual(self.create(version="3.0")["passport"]["parent_agent_id"], first["id"])
+        self.assertEqual(self.create(version="1.5")["passport"]["parent_agent_id"], first["id"])
+        self.assertEqual(self.create(version="1.0")["passport"]["id"], first["id"])
+
+    def test_unreadable_setup_cannot_have_a_matching_fingerprint(self):
+        from unittest import mock
+
+        self.scan()
+        saved = self.create()["passport"]["id"]
+        with mock.patch("repos.setup_fingerprint", return_value=None):
+            listed = list_passports(self.registry, self.home)["passports"]
+            self.assertEqual(next(row for row in listed if row["id"] == saved)["setup"], "unreadable")
+            with self.assertRaises(PassportRequestError):
+                self.create(version="2.0")
+
+    def test_legacy_id_is_retained_for_the_same_repository(self):
+        from forkit.domain.integrity import verify_passport_id
+        from forkit.registry import LocalRegistry
+        from forkit.schemas import AgentPassport
+
+        self.scan()
+        sample = self.create()["passport"]
+        sample["name"] = "app/claude-code"
+        sample["id"] = verify_passport_id(sample)["derived_id"]
+        registry = LocalRegistry(self.registry)
+        registry.delete(self.create()["passport"]["id"])
+        registry.register_agent(AgentPassport.from_dict(sample))
+        self.assertEqual(self.create()["passport"]["id"], sample["id"])
+        self.assertEqual(self.create(version="2.0")["passport"]["parent_agent_id"], sample["id"])
 
     def test_rejects_bad_requests(self):
         with self.assertRaises(PassportRequestError) as no_scan:

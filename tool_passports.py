@@ -37,7 +37,8 @@ from forkit.schemas import AgentPassport
 from collector import (_CHROME_EXTENSION_ID, _EXTENSION_FOLDER, CHROMIUM_ROOTS, EDITOR_DIRS, _read_plist,
                        _removed_extension_folders, _safe_listdir, _version_key, app_paths, find_commands,
                        read_publisher, requested_names, signing_target)
-from repo_passports import PassportRequestError, _passports_named, _registry, passport_display_name, provider_model
+from repo_passports import (PassportRequestError, _registry, existing_version, passport_display_name,
+                            provider_model, same_version, scoped_name, scoped_versions, version_key)
 
 SOURCE = "footprints-device-tool"
 KINDS = ("app", "cli", "editor-extension", "browser-extension")
@@ -58,33 +59,26 @@ TOOL_PROVIDERS = {
 TASK_TYPES = {"Coding agent": "code-assistant", "AI editor": "code-assistant", "Editor extension": "code-assistant",
               "AI app": "personal-assistant", "Browser extension": "personal-assistant"}
 
-_hash_cache = {}
-
-
 def _sha256_file(path: Path):
-    """SHA-256 of a file, cached by path, size and modification time."""
+    """Read the file again for each check, even when size and mtime match."""
+    digest = hashlib.sha256()
     try:
-        stat = path.stat()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
     except OSError:
         return None
-    key = (str(path), stat.st_size, stat.st_mtime_ns)
-    if key not in _hash_cache:
-        digest = hashlib.sha256()
-        try:
-            with open(path, "rb") as handle:
-                for chunk in iter(lambda: handle.read(1 << 20), b""):
-                    digest.update(chunk)
-        except OSError:
-            return None
-        _hash_cache[key] = digest.hexdigest()
-    return _hash_cache[key]
+    return digest.hexdigest()
 
 
-def fingerprint(parts) -> str:
+def fingerprint(parts) -> str | None:
     """SHA-256 over (role, file hash) pairs. Roles, not paths, so the location does not matter."""
     combined = hashlib.sha256()
     for role, path in parts:
-        combined.update(f"{role}\0{_sha256_file(path) or 'missing'}\n".encode("utf-8"))
+        file_hash = _sha256_file(path)
+        if file_hash is None:
+            return None
+        combined.update(f"{role}\0{file_hash}\n".encode("utf-8"))
     return combined.hexdigest()
 
 
@@ -94,11 +88,11 @@ def detected_version(text):
 
 
 def surface(installation: dict) -> str:
-    kind = installation["kind"]
+    kind = installation.get("kind", "unknown")
     if kind == "editor-extension":
-        return f"{installation['editor']}-extension"
+        return f"{installation.get('editor', 'unknown')}-extension"
     if kind == "browser-extension":
-        return f"{installation['browser']}-extension"
+        return f"{installation.get('browser', 'unknown')}-extension"
     return kind
 
 
@@ -150,7 +144,7 @@ def locate(installation: dict, home: Path, platform: str, applications_dirs=None
         newest = None
         for name in _safe_listdir(folder):
             match = _EXTENSION_FOLDER.match(name)
-            if match and name not in removed and match.group("id").lower() == value:
+            if match and name not in removed and match.group("id").lower() == value.lower():
                 if newest is None or _version_key(match.group("version")) > _version_key(newest[1]):
                     newest = (name, match.group("version"))
         if newest is None:
@@ -192,21 +186,29 @@ def create_tool_passport(registry_root: Path, request: dict, home=None, platform
     else:
         name = str(request.get("creator") or "").strip()
         if not 0 < len(name) <= 100 or "\n" in name:
-            raise PassportRequestError("This tool has no verified publisher. Enter who vouches for it.")
+            raise PassportRequestError("This tool has no verified publisher. Enter who vouches for it.",
+                                       publisher_vouch_required=True)
         creator = {"name": name, "organization": str(request.get("organization") or "").strip()[:100] or None}
 
     version = found["version"] or detected_version(str(request.get("version") or "").strip())
-    if not version or (not found["version"] and str(request.get("version")).strip() != version):
+    if not version or version_key(version) is None or (not found["version"] and str(request.get("version")).strip() != version):
         raise PassportRequestError("Enter the installed version, like 1.0 or 1.0.0 (numbers only).")
 
+    artifact_hash = fingerprint(found["parts"])
+    if artifact_hash is None:
+        raise PassportRequestError("The installation files could not all be read. No passport was created.", 409)
     registry = _registry(registry_root)
+    legacy_name = f"{finding}/{surface(installation)}"
+    name = scoped_name(legacy_name, (SOURCE, finding, *installation.values()))
+    previous, parent = scoped_versions(registry, name, legacy_name, lambda context: (
+        context.get("source") == SOURCE and context.get("finding") == finding
+        and all(context.get(key) == value for key, value in installation.items())
+    ), version)
     model = provider_model(registry, TOOL_PROVIDERS.get(finding, "unspecified"))
-    name = f"{finding}/{surface(installation)}"
-    previous = _passports_named(registry, name)
     passport = AgentPassport(
         name=name, version=version, creator=creator, model_id=model.id,
         task_type=TASK_TYPES.get(request.get("tool_kind"), "other"), architecture="Tool-Use", role="assistant",
-        artifact_hash=fingerprint(found["parts"]), parent_agent_id=previous[0]["id"] if previous else None,
+        artifact_hash=artifact_hash, parent_agent_id=parent,
         deployment_env="local", status="active",
         description=f"{label}, {surface(installation).replace('-', ' ')}",
         metadata={"context": {
@@ -219,13 +221,16 @@ def create_tool_passport(registry_root: Path, request: dict, home=None, platform
             "fingerprinted": [role for role, _path in found["parts"]],
         }},
     )
-    existing = registry.get_agent(passport.id)
+    taken = same_version(previous, passport)
+    existing = existing_version(taken, passport)
     if existing is not None:
-        return {"status": "already-registered", "passport": existing.to_dict(), "check": registry.verify_passport(passport.id)}
-    if any(row.get("version") == version for row in previous):
+        return {"status": "already-registered", "passport": existing, "check": registry.verify_passport(existing["id"])}
+    if taken:
         raise PassportRequestError(
             f"Version {version} already has a passport for a different program. The program changed without a new "
             "version number: it may have been rebuilt or replaced.", 409)
+    if registry.get_agent(passport.id) is not None:
+        raise PassportRequestError("This ID already exists with conflicting local metadata.", 409)
     registry.register_agent(passport)
     return {"status": "registered", "passport": passport.to_dict(), "check": registry.verify_passport(passport.id)}
 
@@ -241,7 +246,10 @@ def tool_state(data: dict, context: dict, home: Path, platform: str, application
     if found is None:
         return {"install": "missing", "publisher": "not-checked"}
     state = {"current_version": found["version"]}
-    if fingerprint(found["parts"]) == data.get("artifact_hash"):
+    current_hash = fingerprint(found["parts"])
+    if current_hash is None:
+        state["install"] = "unreadable"
+    elif current_hash == data.get("artifact_hash"):
         state["install"] = "unchanged"
     elif found["version"] and found["version"] != data.get("version"):
         state["install"] = "updated"
@@ -250,7 +258,12 @@ def tool_state(data: dict, context: dict, home: Path, platform: str, application
     team = context.get("publisher_team")
     if team and platform == "darwin" and found["signing_target"]:
         current = read_publisher(found["signing_target"], signer_reader)["signer"]
-        state["publisher"] = "verified" if current == team else "changed"
+        if current is None:
+            state["publisher"] = "not-checked"
+        elif current == "invalid":
+            state["publisher"] = "invalid"
+        else:
+            state["publisher"] = "verified" if current == team else "changed"
     else:
         state["publisher"] = "user" if context.get("creator_source") == "user" else "not-checked"
     return state
