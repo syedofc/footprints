@@ -1,6 +1,6 @@
-# Footprints Discovery
+# Footprints
 
-Footprints Discovery is a local UI for exploring AI discovery and working with model passports. Footprints collects file evidence and metadata. [Forkit Core](https://github.com/Forkit-Dev-Core/Forkit_Dev) creates the passport, assigns its ID, and verifies its identity.
+Footprints is a local app for AI discovery, evidence insights, and passport workflows. The current release provides a synthetic discovery demo and local model passport creation and verification. [Forkit Core](https://github.com/Forkit-Dev-Core/Forkit_Dev) creates each passport, assigns its ID, and verifies its identity.
 
 ## Create and verify a model passport
 
@@ -39,13 +39,17 @@ python -m pip install -r requirements.txt
 python serve.py
 ```
 
-Open [Footprints on this device](http://127.0.0.1:8765/footprints/). Choose a nonempty model artifact up to 64 MiB, enter its name, version, creator, task, and architecture, then select **Create and verify passport**. To try it with a small public artifact, use the [Tiny Random BERT safetensors file](https://huggingface.co/hf-internal-testing/tiny-random-bert/blob/f171d7baecaf37b5da5a3616d8833b9969753535/model.safetensors).
+Open [Footprints on this device](http://127.0.0.1:8765/footprints/). Choose a nonempty model artifact up to 64 MiB, enter its name, version, creator, task, and architecture, then select **Create and verify passport**. To try it with synthetic data, choose [sample-artifact.txt](scripts/sample-artifact.txt) from the checkout or extracted Windows ZIP.
 
-For that example, enter `tiny-random-bert`, `1.0.0`, and `Hugging Face`. Choose **Other** for the task and **Encoder only** for the architecture. The version is a local passport label for the example.
+For that example, enter `footprints-sample`, `1.0.0`, and `Footprints example`. Choose **Other** for both task and architecture.
 
 The browser computes SHA-256 from the selected file. Core receives the hash, filename, and form metadata, and stores a passport in `~/.forkit/footprints`. Use `--registry-root` to choose another local directory. Verification checks that Core can derive the same ID from the stored identity fields. The UI displays the submitted file hash and the returned passport ID.
 
 You can also open `index.html` directly to try the simulated discovery example. That example uses fictional signals and does not scan your device.
+
+## Share an example
+
+Use the simulated discovery page and the synthetic sample file for public demos, screenshots, and bug reports. A local passport can contain the filename and identity fields you enter. Keep local registry files and real identifiers private.
 
 ## Run the checks
 

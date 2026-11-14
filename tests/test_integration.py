@@ -20,6 +20,7 @@ class FootprintsIntegrationTest(unittest.TestCase):
                 self.assertEqual(page.status_code, 200)
                 self.assertIn('id="passport-form"', page.text)
                 self.assertEqual(page.headers["x-frame-options"], "DENY")
+                self.assertIn("connect-src 'self'", page.headers["content-security-policy"])
                 for script in ("discovery.js", "passport.js"):
                     self.assertEqual(client.get(f"/footprints/{script}").status_code, 200)
                 self.assertEqual(client.get("/footprints/serve.py").status_code, 404)
@@ -39,7 +40,10 @@ class FootprintsIntegrationTest(unittest.TestCase):
                     "/models", json=payload, headers={"Origin": "http://127.0.0.1"}
                 )
                 self.assertEqual(created.status_code, 201, created.text)
+                self.assertEqual(created.headers["cache-control"], "no-store")
                 passport_id = created.json()["id"]
+                stored_response = client.get(f"/passports/{passport_id}")
+                self.assertEqual(stored_response.headers["cache-control"], "no-store")
                 stored_path = registry_root / "models" / f"{passport_id}.json"
                 passport = json.loads(stored_path.read_text(encoding="utf-8"))
                 self.assertEqual(passport["artifact_hash"], artifact_hash)

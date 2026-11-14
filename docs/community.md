@@ -9,4 +9,4 @@ When sharing a highlight, include:
 - **How to try it:** A link to a public demo, writeup, pull request, or reproducible example.
 - **What’s next:** A link to a follow-up issue, if there is one.
 
-Share only material you have permission to publish. Use sample data in screenshots and demos, and get consent before identifying people or groups. Maintainers can feature useful, reproducible posts in Discussions.
+Share only material you have permission to publish. Use the simulated discovery page or a fresh registry containing only synthetic passports. Before sharing a screenshot, video, or log, remove repository names and remote hosts, account names, paths, device identifiers, real passport IDs, and file fingerprints. Keep raw scan history and registry files out of public posts. Maintainers can feature reproducible posts in Discussions.

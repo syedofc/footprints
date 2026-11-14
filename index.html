@@ -17,6 +17,11 @@
   ul { padding: 0; list-style: none; }
   li { margin: .65rem 0; padding: .7rem 1rem; background: white; border: 1px solid #d4deea; border-radius: .4rem; }
   strong { display: block; }
+  .print-note { display: none; }
+  @media print {
+    section[aria-labelledby="passport-heading"] { display: none; }
+    .print-note { display: block; }
+  }
 </style>
 <script src="discovery.js" defer></script>
 <script src="passport.js" defer></script>
@@ -76,4 +81,8 @@
     <noscript>Enable JavaScript to display the discovery results.</noscript>
   </section>
 </main>
+<aside class="print-note">
+  <h1>Footprints</h1>
+  <p>Printed results show the synthetic discovery sample.</p>
+</aside>
 </html>
